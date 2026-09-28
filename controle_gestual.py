@@ -8,7 +8,7 @@ import numpy as np
 
 JANELA = "Trabalho 2 - Controle gestual de brilho"
 ROI = (320, 50, 620, 460)          # retângulo da mão: x1, y1, x2, y2
-QUADROS_FUNDO = 30                 # quadros usados no modelo do fundo (~1 s)
+QUADROS_FUNDO = 30                 # qtde de quadros usados no modelo do fundo
 TEMPO_CALIBRACAO = 3.0             # duração da calibração do gesto (s)
 KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
 VERDE, AZUL, AMARELO = (80, 220, 80), (255, 180, 40), (40, 220, 255)  # BGR
@@ -39,12 +39,16 @@ def calibrar_fundo(quadros):
 
 # ANÁLISE DA MÃO ---------------------------------------------------------
 def analisar_mao(mascara):
-    # RETR_CCOMP separa contornos externos (mão) e internos (furos).
+
+    # RETR_CCOMP separa contornos externos (mão) e internos (furos)
+    # é importante para identificar o furo entre o polegar e o indicador na pinça fechada (OK).
     contornos, hierarquia = cv2.findContours(mascara, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
 
     # se não tiver contornos (só fundo), retorna None
     if not contornos:
         return None
+
+    # seleciona o contorno externo de maior área (a mão) e descarta os demais
     externos = [i for i, h in enumerate(hierarquia[0]) if h[3] == -1]
     indice = max(externos, key=lambda i: cv2.contourArea(contornos[i]))
     contorno = contornos[indice]
@@ -55,8 +59,8 @@ def analisar_mao(mascara):
             or x + w >= mascara.shape[1] - 1):
         return None
 
-    # Palma: maior círculo inscrito na mão (máximo da transformada de
-    # distância). Os furos ficam vazios para o anel do OK não virar "palma".
+    # palma é o maior círculo inscrito na mão (máximo da transformada de distância). 
+    # os furos ficam vazios para o anel do OK não virar "palma".
     cheia = np.zeros_like(mascara)
     cv2.drawContours(cheia, [contorno], -1, 255, cv2.FILLED)
     distancias = cv2.distanceTransform(cv2.bitwise_and(cheia, mascara), cv2.DIST_L2, 5)
@@ -67,8 +71,7 @@ def analisar_mao(mascara):
     mao = dict(contorno=contorno, casca=cv2.convexHull(contorno), centro=centro,
                raio=raio, furo=None, pinca=None, abertura=None)
 
-    # Pinça fechada (sinal de OK): o indicador desce até o polegar e o vão
-    # entre eles vira um furo (contorno filho) fora da palma e acima do punho.
+    # na pinça fechada (OK), espaço entre o polegar e o indicador vira um furo (contorno filho) fora da palma e acima do punho.
     for i, h in enumerate(hierarquia[0]):
         m = cv2.moments(contornos[i])
         if h[3] != indice or m["m00"] < 0.1 * raio**2:  # ignora furos pequenos
@@ -78,8 +81,7 @@ def analisar_mao(mascara):
             mao.update(furo=contornos[i], abertura=0.0)
             return mao
 
-    # Pinça aberta: o vão entre polegar e indicador é um defeito de
-    # convexidade, que liga duas pontas da casca passando pelo ponto mais fundo.
+    # na pinça aberta, o espaço entre polegar e indicador é um defeito de convexidade
     try:
         defeitos = cv2.convexityDefects(contorno, cv2.convexHull(contorno, returnPoints=False))
     except cv2.error:  # contornos muito irregulares: ignora o quadro
@@ -87,10 +89,7 @@ def analisar_mao(mascara):
     if defeitos is None:
         return mao
 
-    # O polegar fica parado ao lado da palma e o indicador desce até ele. A
-    # pinça é o defeito que contém a ponta do polegar: entre as pontas de dedo
-    # (longe da palma) que ficam ao lado da palma, e não acima dela, é a mais
-    # baixa. Não se supõe qual ponta está mais alta, pois o indicador desce.
+    # a pinça é o defeito que contém a ponta do polegar
     mais_baixa = -1
     for inicio, fim, meio, profundidade in defeitos.reshape(-1, 4):
         p1, p2, vale = contorno[[inicio, fim, meio], 0]
@@ -108,13 +107,8 @@ def analisar_mao(mascara):
     return mao
 # ------------------------------------------------------------------------
 
+# CALIBRAÇÃO DO GESTO ----------------------------------------------------
 def calibrar_gesto(amostras):
-    """Converte as aberturas medidas na calibração nos limites 0 % e 100 %.
-
-    Usa só a pinça aberta, pois a fechada (abertura 0) já é 0 %. Assim, 0 % é
-    a menor abertura antes do toque e o nível não salta ao encostar os dedos.
-    Os percentis 5 e 95 descartam detecções erradas isoladas nos extremos.
-    """
     abertas = [a for a in amostras if a > 0]
     if len(abertas) < 15:
         print("Calibracao falhou: pinca pouco detectada. Aperte C de novo.")
@@ -167,18 +161,23 @@ def desenhar_hud(frame, mascara, mao, nivel, status, limiar, fps):
 # ------------------------------------------------------------------------
 
 def main():
+
+    # INICIALIZAÇÃO DA WEBCAM --------------------------------------------
     camera = cv2.VideoCapture(0)
     if not camera.isOpened():
         print("Nao foi possivel abrir a webcam.")
         return
     camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    # ------------------------------------------------------------------------
 
     x1, y1, x2, y2 = ROI
     fundo, limiar, quadros_fundo = None, 10, None  # lista só durante a captura
     calibracao, amostras, inicio_cal = None, [], None
     historico = deque(maxlen=5)  # mediana móvel: ignora medidas isoladas erradas
     nivel, fps, anterior = 100.0, 0.0, perf_counter()
+
+    # LOOP PRINCIPAL (LEITURA DE FRAMES DA CÂMERA) -----------------------
     try:
         while True:
             ok, frame = camera.read()
@@ -191,7 +190,7 @@ def main():
             agora = perf_counter()
 
             # CALIBRAÇÃO E ANÁLISE DO FUNDO ------------------------------
-            if quadros_fundo is not None:               
+            if quadros_fundo is not None:               # calibração do fundo
                 quadros_fundo.append(imagem_processada)
                 if len(quadros_fundo) == QUADROS_FUNDO:
                     fundo = calibrar_fundo(quadros_fundo)
@@ -200,9 +199,6 @@ def main():
                 mascara = binarizacao(imagem_processada, fundo, limiar)
                 mao = analisar_mao(mascara)
             abertura = None if mao is None else mao["abertura"]
-            # ------------------------------------------------------------
-
-            # CALIBRAÇÃO DO GESTO ----------------------------------------
             if inicio_cal is not None:                  # calibração do gesto
                 if abertura is not None:
                     amostras.append(abertura)
