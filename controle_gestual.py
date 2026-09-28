@@ -92,7 +92,7 @@ def analisar_mao(mascara):
     # (longe da palma) que ficam ao lado da palma, e não acima dela, é a mais
     # baixa. Não se supõe qual ponta está mais alta, pois o indicador desce.
     mais_baixa = -1
-    for inicio, fim, meio, profundidade in defeitos[:, 0]:
+    for inicio, fim, meio, profundidade in defeitos.reshape(-1, 4):
         p1, p2, vale = contorno[[inicio, fim, meio], 0]
         baixa = max(p1, p2, key=lambda p: p[1])  # candidata a ponta do polegar
         dx, dy = baixa - c
